@@ -33,7 +33,7 @@
 - **No secrets in git** — `.env` is gitignored. Commit `.env.example` as template.
 - **httpOnly cookies** — Tokens stored in httpOnly cookies, never in localStorage/headers.
 - **Input validation** — All request bodies validated with Zod schemas.
-- **Rate limiting** — Auth endpoints rate-limited (20 req/15min).
+- **Rate limiting** — Login 10/15min, register 5/15min, GitHub proxy 60/min.
 - **Helmet** — Security headers enabled.
 - **Token never exposed** — GitHub PAT encrypted in DB, decrypted only in server memory during proxy calls.
 
@@ -51,8 +51,21 @@
 
 ## Git Workflow
 
-Same as DevPulse FE:
-- `main` — production-ready
-- `develop` — development branch
-- `feature/*` or `fix/*` — from develop, merge back
-- Claude handles all git operations
+**Branching model:**
+- `main` — stable, production-ready code only. Do NOT commit directly to main.
+- `develop` — primary development branch. All feature work merges here.
+- `feature/short-name` or `fix/short-name` — created from `develop`, merged back into `develop`.
+- **Release:** merge `develop` into `main` when ready for production.
+
+**Rules:**
+- Do NOT commit directly to `develop` or `main`. Always use feature/fix branches.
+- Commit after the task is completed and tested OK
+- Commit message: Conventional Commits, in English
+- After committing, always push the branch to remote
+- Always push both `develop` and the feature branch
+
+**Automation (Claude handles entirely):**
+- Create feature/fix branches from `develop`
+- Commit, push, create PR, and merge into `develop` via GitHub MCP
+- Delete feature branch after merge
+- User only reviews — all git operations are automated
