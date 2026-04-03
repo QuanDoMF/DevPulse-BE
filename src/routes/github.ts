@@ -93,7 +93,7 @@ async function getDecryptedToken(userId: number): Promise<string | null> {
   }
 }
 
-router.get("/proxy/*", async (req: Request, res: Response): Promise<void> => {
+router.get("/proxy/{*path}", async (req: Request, res: Response): Promise<void> => {
   try {
     const token = await getDecryptedToken(req.user!.sub);
     if (!token) {
@@ -101,7 +101,7 @@ router.get("/proxy/*", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const githubPath = req.params[0];
+    const githubPath = req.params.path;
     if (!githubPath) {
       res.status(400).json({ error: "Missing API path" });
       return;
