@@ -101,7 +101,8 @@ router.get("/proxy/{*path}", async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const githubPath = req.params.path;
+    const rawPath = req.params.path;
+    const githubPath = Array.isArray(rawPath) ? rawPath.join("/") : String(rawPath);
     if (!githubPath) {
       res.status(400).json({ error: "Missing API path" });
       return;
