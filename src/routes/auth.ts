@@ -15,6 +15,8 @@ import { config } from "../config.js";
 const router = Router();
 
 const BCRYPT_ROUNDS = 12;
+// Dummy hash for constant-time comparison when user not found
+const DUMMY_HASH = "$2a$12$R9h7cIPz0gi.URNNX3kh2OPST9EBkj2MvvXfb0vZMEJmWVvjV32qy";
 
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
   const isProduction = config.nodeEnv === "production";
@@ -23,7 +25,7 @@ function setAuthCookies(res: Response, accessToken: string, refreshToken: string
     httpOnly: true,
     secure: isProduction,
     sameSite: "strict",
-    maxAge: 15 * 60 * 1000, // 15 minutes
+    maxAge: 15 * 60 * 1000,
     path: "/",
   });
 
@@ -31,14 +33,14 @@ function setAuthCookies(res: Response, accessToken: string, refreshToken: string
     httpOnly: true,
     secure: isProduction,
     sameSite: "strict",
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    path: "/api/auth/refresh",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/",
   });
 }
 
 function clearAuthCookies(res: Response) {
   res.clearCookie("devpulse_access_token", { path: "/" });
-  res.clearCookie("devpulse_refresh_token", { path: "/api/auth/refresh" });
+  res.clearCookie("devpulse_refresh_token", { path: "/" });
 }
 
 function hashToken(token: string): string {
@@ -57,37 +59,43 @@ router.post(
   "/register",
   validate(registerSchema),
   async (req: Request, res: Response): Promise<void> => {
-    const { email, name, password } = req.body;
+    try {
+      const { email, name, password } = req.body;
 
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      res.status(409).json({ error: "Email already registered" });
-      return;
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing) {
+        // Generic error to prevent user enumeration
+        res.status(400).json({ error: "Registration failed" });
+        return;
+      }
+
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+      const user = await prisma.user.create({
+        data: { email, name, passwordHash },
+      });
+
+      const payload = { sub: user.id, email: user.email };
+      const accessToken = generateAccessToken(payload);
+      const refreshToken = generateRefreshToken(payload);
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          refreshToken: hashToken(refreshToken),
+          refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      setAuthCookies(res, accessToken, refreshToken);
+
+      res.status(201).json({
+        user: { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl },
+      });
+    } catch (err) {
+      console.error("Register error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
-
-    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-
-    const user = await prisma.user.create({
-      data: { email, name, passwordHash },
-    });
-
-    const payload = { sub: user.id, email: user.email };
-    const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(payload);
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        refreshToken: hashToken(refreshToken),
-        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    setAuthCookies(res, accessToken, refreshToken);
-
-    res.status(201).json({
-      user: { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl },
-    });
   },
 );
 
@@ -95,44 +103,48 @@ router.post(
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1),
+  password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 router.post(
   "/login",
   validate(loginSchema),
   async (req: Request, res: Response): Promise<void> => {
-    const { email, password } = req.body;
+    try {
+      const { email, password } = req.body;
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      res.status(401).json({ error: "Invalid credentials" });
-      return;
+      const user = await prisma.user.findUnique({ where: { email } });
+
+      // Constant-time: always run bcrypt.compare even if user not found
+      const passwordHash = user?.passwordHash || DUMMY_HASH;
+      const valid = await bcrypt.compare(password, passwordHash);
+
+      if (!user || !valid) {
+        res.status(401).json({ error: "Invalid credentials" });
+        return;
+      }
+
+      const payload = { sub: user.id, email: user.email };
+      const accessToken = generateAccessToken(payload);
+      const refreshToken = generateRefreshToken(payload);
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          refreshToken: hashToken(refreshToken),
+          refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      setAuthCookies(res, accessToken, refreshToken);
+
+      res.json({
+        user: { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl },
+      });
+    } catch (err) {
+      console.error("Login error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
-
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) {
-      res.status(401).json({ error: "Invalid credentials" });
-      return;
-    }
-
-    const payload = { sub: user.id, email: user.email };
-    const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(payload);
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        refreshToken: hashToken(refreshToken),
-        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    setAuthCookies(res, accessToken, refreshToken);
-
-    res.json({
-      user: { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl },
-    });
   },
 );
 
@@ -141,7 +153,7 @@ router.post(
 router.post("/refresh", async (req: Request, res: Response): Promise<void> => {
   const token = req.cookies?.devpulse_refresh_token;
   if (!token) {
-    res.status(401).json({ error: "No refresh token" });
+    res.status(401).json({ error: "Authentication required" });
     return;
   }
 
@@ -159,7 +171,7 @@ router.post("/refresh", async (req: Request, res: Response): Promise<void> => {
 
     if (!user) {
       clearAuthCookies(res);
-      res.status(401).json({ error: "Invalid refresh token" });
+      res.status(401).json({ error: "Authentication required" });
       return;
     }
 
@@ -183,36 +195,46 @@ router.post("/refresh", async (req: Request, res: Response): Promise<void> => {
     });
   } catch {
     clearAuthCookies(res);
-    res.status(401).json({ error: "Invalid refresh token" });
+    res.status(401).json({ error: "Authentication required" });
   }
 });
 
 // --- Logout ---
 
 router.post("/logout", requireAuth, async (req: Request, res: Response): Promise<void> => {
-  await prisma.user.update({
-    where: { id: req.user!.sub },
-    data: { refreshToken: null, refreshTokenExpiresAt: null },
-  });
+  try {
+    await prisma.user.update({
+      where: { id: req.user!.sub },
+      data: { refreshToken: null, refreshTokenExpiresAt: null },
+    });
 
-  clearAuthCookies(res);
-  res.json({ message: "Logged out" });
+    clearAuthCookies(res);
+    res.json({ message: "Logged out" });
+  } catch (err) {
+    console.error("Logout error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // --- Me ---
 
 router.get("/me", requireAuth, async (req: Request, res: Response): Promise<void> => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    select: { id: true, email: true, name: true, avatarUrl: true },
-  });
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      select: { id: true, email: true, name: true, avatarUrl: true },
+    });
 
-  if (!user) {
-    res.status(401).json({ error: "User not found" });
-    return;
+    if (!user) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+
+    res.json({ user });
+  } catch (err) {
+    console.error("Auth check error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
-
-  res.json({ user });
 });
 
 export default router;
