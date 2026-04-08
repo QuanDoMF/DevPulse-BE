@@ -6,6 +6,9 @@ import rateLimit from "express-rate-limit";
 import { config } from "./config.js";
 import authRouter from "./routes/auth.js";
 import githubRouter from "./routes/github.js";
+import projectsRouter from "./routes/projects.js";
+import tasksRouter from "./routes/tasks.js";
+import notesRouter from "./routes/notes.js";
 import prisma from "./lib/prisma.js";
 
 const app = express();
@@ -56,6 +59,9 @@ app.use("/api/auth/register", registerLimiter);
 app.use("/api/auth", authRouter);
 app.use("/api/github/proxy", githubProxyLimiter);
 app.use("/api/github", githubRouter);
+app.use("/api/projects", projectsRouter);
+app.use("/api/tasks", tasksRouter);
+app.use("/api/notes", notesRouter);
 
 // Health check
 app.get("/api/health", (_req, res) => {
